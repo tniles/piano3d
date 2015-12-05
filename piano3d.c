@@ -1,5 +1,5 @@
 /***********************************************************
- * piano3d_R3.c 
+ * piano3d.c 
  * USES EXTERNAL 12MHz CLOCK FROM FTDI CHIP
  *
  * Tyler Niles
@@ -35,15 +35,19 @@
 #include <util/delay.h>
 
 
-#define NUMKEYS  61		// 61 piano keys
-#define ANODES    6		//  6 anodes
-#define CATHODES 11		// 11 cathodes
-#define PULLTIME  3		// delay time (us) for pulling cats low
+#define NUMKEYS    61		// 61 piano keys
+#define ANODES      6		//  6 anodes
+#define CATHODES   11		// 11 cathodes
 
-// Flow control
-#define RTS_n	(PIND & (1<<PIND2))	// Input from FTDI chip
+#define CHECKTIME  50		// scan the matrix this often (us)
+#define PULLTIME    4		// delay time (us) for pulling cats low
+				// NOTE: this causes pulltime*11 scan time
+
+/* Flow control */
+// Handled in FTDI hardware; changes in these lines will flush FTDI buffers
+#define RTS_n	(PIND & (1<<PIND2))	// Input from FTDI chip (if=0 FTDI ready to receive)
 //#define CTS_n	PORTD.PD3		// Output to FTDI chip
-#define CTS_n_mask	0xF7		// & to send pd3 low to assert
+#define CTS_n_mask	0xF7		// & to send pd3 low to assert (set 0 when AVR ready to receive)
 
 // Read these Pins
 #define AN0	(PINC & (1<<PINC0))	//c1
@@ -113,7 +117,8 @@ void sendkeylist(unsigned int packet){
 	data >>= 8;
 	USART_Transbyte((char) (data & 0xFF));	 // byte #8		 (MSB)
 
-	/* Total Packet Size: 8 bytes */
+	USART_Transbyte(0xDB);	 // byte #9 - custom synch code 1101 1011
+	/* Total Packet Size: 9 bytes */
 }
 
 
@@ -167,6 +172,9 @@ void getkeylist(void){
 	  if(!AN4)  data += (shifter<<(i*ANODES-4));	//
 	  if(!AN5)  data += (shifter<<(i*ANODES-5));	//
 	PORTB = 0xFF;			// reset portB
+	_delay_us(0);
+	_delay_us(0);
+	_delay_us(0);
 
 	for(i=7; i<CATHODES; i++){	// i continues at 7
 	  bufbyte2 = PIND | 0xF0;		// portD Rx/Tx, Flow Ctrl pins considered, adjust pd5,6,7
@@ -226,7 +234,7 @@ UCSR0A=0x00;	// bit 1 is U2x0... set to 2xspeed, clear for 1xspeed
 UCSR0B=0x18;	//enable rx bit 4 - enable tx bit 3
 UCSR0C=0x06;
 UBRR0H=0x00;
-UBRR0L=0x26;	// @12MHz: 0x26 for 19.2k, 0x12 for 38.4k, 0x05 for 115.2k, 0x04 for 150k, 0x02 for 250k, 0x00 for 750k
+UBRR0L=0x00;	// @12MHz: 0x26 for 19.2k, 0x12 for 38.4k, 0x05 for 115.2k, 0x04 for 150k, 0x02 for 250k, 0x00 for 750k
 
 // Analog Comparator
 // Analog Comparator: OFF
@@ -256,14 +264,11 @@ int main(void){
   flag=1;			// move to timer interrupt?
   i=0;				// init packet counter
 
-  PORTD = PIND & CTS_n_mask;	// assert clear to send
   while(1){
-    _delay_us(25);	// check keys this often... or use flag
+    _delay_us(CHECKTIME);	// check keys this often... or use flag
     getkeylist();
     if(!RTS_n){				// if RTS asserted, send
-      PORTD = PIND | 0x08;		// de-assert clear to send
       sendkeylist(i++);			//
-      PORTD = PIND & CTS_n_mask;	// assert clear to send
     }
   }
 
