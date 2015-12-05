@@ -1,5 +1,5 @@
 /***********************************************************
- * piano3d_R0.c 
+ * piano3d_R1.c 
  *
  * Tyler Niles
  * 4/15/2010
@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define F_CPU	8000000UL	// Clock speed
+#define F_CPU	8000000UL	// Clock speed (8MHz CKSEL3..0=0010)
 #include <util/delay.h>
 
 //#define LEDTEST   1		// test with LEDs (no UART) 
@@ -62,10 +62,11 @@
 #define CAT10	PORTD.PD7	//c14
 */
 
-typedef unsigned char KEYS;	// keylist data type
+typedef unsigned long long KEYS;	// keylist data type
 
 /* GLOBALS */
 char flag = 0;
+KEYS keys;			// list of 61 keys (1 bit per key)
 
 
 void USART_Transbyte(unsigned char data){
@@ -78,108 +79,108 @@ void USART_Transword(unsigned int data){
 	USART_Transbyte((char) (data & 0xFF));          // send low byte
 }
   
-void send(unsigned int value, unsigned char data){
-    USART_Transword(value);  	// send key# - 2byte
-    USART_Transbyte(data);	// send keydata - 1bytes
-    USART_Transbyte('\r');      // CR terminator: decimal 13      
-    // Total Packet Size: 4 bytes
+void sendkeylist(unsigned int packet, KEYS data){
+	USART_Transbyte((char) packet); 		 // send packet# - 1byte
+	//USART_Transbyte((char) (data = ((data>>56) & 0xFF) ? ((data>>56) & 0xFF) : 0x3D));
+	/*
+	USART_Transbyte((char) ((data>>56) & 0xFF));	 // send keydata - 1byte (MSB)
+	USART_Transbyte((char) ((data>>48) & 0xFF));	 // byte #2
+	USART_Transbyte((char) ((data>>40) & 0xFF));	 // byte #3
+	USART_Transbyte((char) ((data>>32) & 0xFF));	 // byte #4
+	USART_Transbyte((char) ((data>>24) & 0xFF));	 // byte #5
+	USART_Transbyte((char) ((data>>16) & 0xFF));	 // byte #6
+	USART_Transbyte((char) ((data>>8)  & 0xFF));	 // byte #7
+	USART_Transbyte((char) (data & 0xFF));		 // byte #8 (LSB)
+	*/
+	USART_Transbyte(0xde);	 // send keydata - 1byte (MSB)
+	USART_Transbyte(0xad);	 // byte #2
+	USART_Transbyte(0x01);	 // byte #3
+	USART_Transbyte(0xbe);	 // byte #4
+	USART_Transbyte(0xef);	 // byte #5
+	USART_Transbyte(0x03);	 // byte #6
+	USART_Transbyte(0x20);	 // byte #7
+	USART_Transbyte(0x10);	 // byte #8 (LSB)
+	USART_Transbyte('\r');	 // CR terminator: decimal 13      
+	/* Total Packet Size: 10 bytes */
 }
 
-void getkeys(KEYS keys[NUMKEYS]){
 
-	/* Set list of keys 1 or 0 if pressed or released */
+void getkeys(KEYS keys){
+
+	/* Set bits of keys 1 or 0 if pressed or released */
 	unsigned char bufbyte, bufbyte2;
+#ifdef LEDTEST
+       	unsigned char ledbuf;
+#endif
 	unsigned int i;
+	KEYS data;		// temp var for keylist
 
 	/* Read AN0-5 as CAT0-10 are pulled low in succession */
 	/* During LEDTEST, LEDs are considered on PortD, whereas */
 	/* in normal ops, Tx/Rx pins are considered on PortD */
 
+	data = 0x0000000000000000;		// assume all keys NOT pressed
+
 #ifndef LEDTEST
 	/* FULL Keyboard Read */
-	i = 0;  bufbyte  = 0xFF;  PORTB = bufbyte  & ~(1<<i);
-	if(!AN0)     keys[0] = 1;	// Special case @ i=0
-	for(i=1; i<CATHODES; i++){	// Start at 1 to avoid special case
-	  bufbyte  = 0xFF;		// default portB config
-	  bufbyte2 = PIND | 0xE0;	// portD Rx/Tx pins considered, adjust pd5,6,7
-	  if(i<8)    PORTB = bufbyte  & ~(1<<i);    // send low one cathode group
-	  else	     PORTD = bufbyte2 & ~(1<<(i-3));	// pd5,6,7 for CAT8,9,10
+	i = 0;  bufbyte = 0xFF;  PORTB = bufbyte & ~(1<<i);
+	if(!AN0)    data = 1;			// Special case @ i=0
+	for(i=1; i<CATHODES; i++){		// Start at 1 to avoid special case
+	  if(i<8){
+		bufbyte  = 0xFF;		// default portB config
+		PORTB = bufbyte  & ~(1<<i);     // send low one cathode group
+	  }
+	  else{
+		bufbyte2 = PIND | 0xE0;		// portD Rx/Tx pins considered, adjust pd5,6,7
+		PORTD = bufbyte2 & ~(1<<(i-3));	// pd5,6,7 for CAT8,9,10
+	  }
 
-	  _delay_us(3);	// NEED this delay here! (time for pulling cathode low)
-	  keys[i*ANODES-0] = AN0 ? 0:1;	// cathode_index * 6_anodes_per - anode_num
-	  keys[i*ANODES-1] = AN1 ? 0:1;	// if sent low, make 1 b/c key is pressed
-	  keys[i*ANODES-2] = AN2 ? 0:1;	// 
-	  keys[i*ANODES-3] = AN3 ? 0:1;	// 
-	  keys[i*ANODES-4] = AN4 ? 0:1;	// 
-	  keys[i*ANODES-5] = AN5 ? 0:1;	// 
+	  _delay_us(3);			// NEED this delay here! (time to pull cathode low)
+	  if(!AN0)  data += (1<<(i*ANODES-0));	// cathode_index * 6_anodes_per - anode_num
+	  if(!AN1)  data += (1<<(i*ANODES-1));	//
+	  if(!AN2)  data += (1<<(i*ANODES-2));	//
+	  if(!AN3)  data += (1<<(i*ANODES-3));	//
+	  if(!AN4)  data += (1<<(i*ANODES-4));	//
+	  if(!AN5)  data += (1<<(i*ANODES-5));	//
 	}
 #else
-/*
-	// SINGLE cathode group test 
-	i = TESTODE;			// 5th group of cathodes (has middle C sharp)
-	bufbyte  = 0xFF;		// default portB config
-	bufbyte2 = PIND & 0xFF;		// portD leds considered, adjust pd5,6,7
-	if(i<8)    PORTB = bufbyte  & ~(1<<i);    // send low one cathode group
-	else       PORTD = bufbyte2 & ~(1<<(i-3));	// pd5,6,7 for CAT8,9,10
+	/* FULL Keyboard test with LEDs */
+	ledbuf=0xFF;				// buffer for LEDs
+	i = 0;  bufbyte = 0xFF;  PORTB = bufbyte & ~(1<<i);
+	if(!AN0)    data = 1;			// Special case @ i=0
+	for(i=1; i<CATHODES; i++){		// Start at 1 to avoid special case
+	  if(i<8){
+		bufbyte  = 0xFF;		// default portB config
+		PORTB = bufbyte  & ~(1<<i);	// send low one cathode group
+	  }
+	  else{
+		bufbyte2 = PIND & 0xFF;		// portD leds considered, adjust pd5,6,7
+		PORTD = bufbyte2 & ~(1<<(i-3));	// pd5,6,7 for CAT8,9,10
+	  }
 
-	_delay_us(1);	// NEED this delay here! (time for pulling cathode low)
-	keys[i*ANODES-0] = AN0 ? 0:1;	// cathode_index * 6_anodes_per - anode_num
-	keys[i*ANODES-1] = AN1 ? 0:1;	// if sent low, make 1 b/c key is pressed
-	keys[i*ANODES-2] = AN2 ? 0:1;	// 
-	keys[i*ANODES-3] = AN3 ? 0:1;	// 
-	keys[i*ANODES-4] = AN4 ? 0:1;	// 
-	keys[i*ANODES-5] = AN5 ? 0:1;	// 
-*/
-	// FULL Keyboard test 
-	i = 0;  bufbyte  = 0xFF;  PORTB = bufbyte  & ~(1<<i);
-	if(!AN0)     keys[0] = 1;	// Special case @ i=0
-	for(i=1; i<CATHODES; i++){	// Start at 1 to avoid special case
-	  bufbyte  = 0xFF;		// default portB config
-	  bufbyte2 = PIND & 0xFF;	// portD leds considered, adjust pd5,6,7
-	  if(i<8)    PORTB = bufbyte  & ~(1<<i);    // send low one cathode group
-	  else	     PORTD = bufbyte2 & ~(1<<(i-3));	// pd5,6,7 for CAT8,9,10
-
-	  _delay_us(3);	// NEED this delay here! (time for pulling cathode low)
-	  keys[i*ANODES-0] = AN0 ? 0:1;	// cathode_index * 6_anodes_per - anode_num
-	  keys[i*ANODES-1] = AN1 ? 0:1;	// if sent low, make 1 b/c key is pressed
-	  keys[i*ANODES-2] = AN2 ? 0:1;	// 
-	  keys[i*ANODES-3] = AN3 ? 0:1;	// 
-	  keys[i*ANODES-4] = AN4 ? 0:1;	// 
-	  keys[i*ANODES-5] = AN5 ? 0:1;	// 
+	  _delay_us(3);			// NEED this delay here! (time to pull cathode low)
+	  if(!AN0){  data += (1<<(i*ANODES-0));	ledbuf &= 0xFE; } // cathode_index * 6_anodes_per - anode_num
+	  if(!AN1){  data += (1<<(i*ANODES-1));	ledbuf &= 0xFD;	} // and set leds...
+	  if(!AN2){  data += (1<<(i*ANODES-2));	ledbuf &= 0xFB;	} //
+	  if(!AN3){  data += (1<<(i*ANODES-3));	ledbuf &= 0xF7;	} //
+	  if(!AN4){  data += (1<<(i*ANODES-4));	ledbuf &= 0xEF;	} //
+	  if(!AN5){  data += (1<<(i*ANODES-5));	}		  // ignore 6th (only 5 leds)
 	}
 #endif
+
+	keys = data;			// set key list
 
 	/* RESET CATHODES */
 	PORTB = 0xFF;
 #ifndef LEDTEST
 	PORTD = PIND | 0xE0;		// 'OR' due to tx/rx pins
 #else
-	PORTD = PIND & 0xFF;		// 'AND' due to active low LEDs
+	//PORTD = PIND & 0xFF;		// 'AND' due to active low LEDs
+	PORTD = ledbuf;			// write LEDs to port
 #endif
 
 }
 
-void sendkeylist(KEYS keys[NUMKEYS]){
-	unsigned int i;
-	//for(i=0; i<NUMKEYS; i++){
-	for(i=0; i<1; i++){
-		send(i,keys[i]);
-	}
-}
-
-void lightleds(KEYS keys[NUMKEYS]){
-	/* used to test keypad function */ 
-	/* (LEDS on PD0-4, sacrifice 6th key during testing) */
-	unsigned char bufbyte;
-	unsigned int i=TESTODE;	// 5th cathode group
-	bufbyte  = 0xFF;	// init
-	/* FULL Keyboard test */
-	for(i=1; i<CATHODES; i++){	// skip special case
-	  bufbyte &= ~( (keys[i*ANODES-4]<<PD4) | (keys[i*ANODES-3]<<PD3) | (keys[i*ANODES-2]<<PD2) | \
-		        (keys[i*ANODES-1]<<PD1) | (keys[i*ANODES-0]<<PD0) );  // set for keys pressed
-	}
-	PORTD = bufbyte;	// write to port
-}
 
 void init(void){
 
@@ -221,7 +222,7 @@ UCSR0A=0x00;
 UCSR0B=0x18;	//enable tx/rx
 UCSR0C=0x06;
 UBRR0H=0x00;
-UBRR0L=0x01;	// @ 8MHz: 0x33 for 9600baud, 0x19 for 19.2k, 0x0C for 38.4k, 0x01 for 250k, 0x00 for 0.5M
+UBRR0L=0x33;	// @ 8MHz: 0x33 for 9600baud, 0x19 for 19.2k, 0x0C for 38.4k, 0x01 for 250k, 0x00 for 0.5M
 #else
 UCSR0A=0x00;
 UCSR0B=0x00;
@@ -245,26 +246,29 @@ ADCSRA=0x03;
 
 }
 
+
 int main(void){
 
   asm volatile("cli"::);	// Global disable interrupts
   init();
-  KEYS keys[NUMKEYS];	// list of 61 keys
+
   unsigned int i;
-  for(i=0;i<NUMKEYS;i++){ keys[i] = 0; }
+  //KEYS keys;			// list of 61 keys (1 bit per key)
+  //keys = 0x0000000000000000;	// long long is 8 bytes
+
   asm volatile("sei"::);	// Global enable interrupts
   flag=1;			// move to timer interrupt?
 
+  i=0;
   while(1){
     _delay_us(200);	//check keys this often... or use flag
     getkeys(keys);
 #ifndef LEDTEST
-    sendkeylist(keys);
-#else
-    lightleds(keys);
+    sendkeylist(i++,keys);
 #endif
   }
 
   return 0;
+
 }
 
