@@ -1,0 +1,4 @@
+One half of the mixed reality piano3d project.
+
+The embedded half of the project, a digital piano keyboard was stripped down and hacked to use
+USB communications to send keypresses to a host machine processing the virtual reality app.
